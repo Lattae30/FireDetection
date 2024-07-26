@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 
 # Initialize the Firebase Admin SDK
-cred = credentials.Certificate('fire-detection-72077-firebase-adminsdk-jo7lr-b60cd582a5.json')
+cred = credentials.Certificate('fire-detection-72077-firebase-adminsdk-jo7lr-0c104777d7.json')
 firebase_admin.initialize_app(cred, {
     'storageBucket': 'fire-detection-72077.appspot.com',
     'databaseURL': 'https://fire-detection-72077-default-rtdb.firebaseio.com/'  # Replace with your database URL
