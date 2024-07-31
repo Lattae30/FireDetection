@@ -2,18 +2,24 @@ import cv2
 import numpy as np
 import tensorflow as tf
 import firebase_admin
+import time
+import requests
 from firebase_admin import credentials, messaging, storage, db
 from firebase_admin.exceptions import FirebaseError
 import logging
 import os
 from datetime import datetime
 
-# Initialize the Firebase Admin SDK
-cred = credentials.Certificate('fire-detection-72077-firebase-adminsdk-jo7lr-0c104777d7.json')
+# initialize the Firebase Admin SDK
+cred = credentials.Certificate('fire-detection-c2a4d-firebase-adminsdk-4wezd-7f6b10b991.json')
 firebase_admin.initialize_app(cred, {
-    'storageBucket': 'fire-detection-72077.appspot.com',
-    'databaseURL': 'https://fire-detection-72077-default-rtdb.firebaseio.com/'  # Replace with your database URL
+    'storageBucket': 'fire-detection-c2a4d.appspot.com', 
+    'databaseURL': 'https://fire-detection-c2a4d-default-rtdb.firebaseio.com/' 
 })
+
+# telegram bot token and chat ID
+TELEGRAM_BOT_TOKEN = '7373126934:AAFZdIgEfF9zx0zGhxgs_nNuMq0O7ewW-P8'
+TELEGRAM_CHAT_ID = '-4226630297'
 
 # Configure logging
 logging.basicConfig(filename='notifications.log', level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -47,7 +53,7 @@ def save_frame(frame, directory='detected_images', filename_prefix='fire_detecte
     cv2.imwrite(filename, frame)
     return filename
 
-def upload_to_storage(file_path, bucket_name='fire-detection-72077.appspot.com'):
+def upload_to_storage(file_path):
     try:
         bucket = storage.bucket()
         blob = bucket.blob(os.path.basename(file_path))
@@ -57,27 +63,6 @@ def upload_to_storage(file_path, bucket_name='fire-detection-72077.appspot.com')
     except Exception as e:
         logging.error('Error uploading image: %s', e)
         return None
-
-# def send_fire_notification(image_url):
-#     try:
-#         message = messaging.Message(
-#             notification=messaging.Notification(
-#                 title='Fire Detected!',
-#                 body='A fire has been detected by the system.',
-#             ),
-#             data={
-#                 'image_url': image_url
-#             },
-#             topic='fire_alerts'
-#         )
-#         response = messaging.send(message)
-#         logging.info('Successfully sent message: %s', response)
-#         print('Successfully sent message:', response)
-#         return True
-#     except FirebaseError as e:
-#         logging.error('Error sending message: %s', e)
-#         print('Error sending message:', e)
-#         return False
 
 def write_to_database(image_url):
     try:
@@ -97,9 +82,28 @@ def write_to_database(image_url):
         print('Error writing to database:', e)
         return False
 
+def send_telegram_message(message, image_path=None):
+    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
+    data = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'text': message
+    }
+    response = requests.post(url, data=data)
+    
+    if image_path:
+        url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto'
+        with open(image_path, 'rb') as image_file:
+            files = {'photo': image_file}
+            data = {'chat_id': TELEGRAM_CHAT_ID}
+            response = requests.post(url, files=files, data=data)
+    
+    return response
+
 def main(tflite_model_path, class_indices={0: 'fire', 1: 'non_fire'}):
     interpreter, input_details, output_details = load_model(tflite_model_path)
     cap = cv2.VideoCapture(0)
+    
+    fire_detected_time = None
 
     while True:
         ret, frame = cap.read()
@@ -109,23 +113,37 @@ def main(tflite_model_path, class_indices={0: 'fire', 1: 'non_fire'}):
         prediction = predict_fire(interpreter, input_details, output_details, frame)
         predicted_label = class_indices[prediction]
 
+        # check for fire and handle notification timing
         if predicted_label == 'fire':
-            text_color = (0, 0, 255)  # Red for fire
-            frame_path = save_frame(frame)
-            image_url = upload_to_storage(frame_path)
-            if image_url:
-                # if send_fire_notification(image_url):
-                write_to_database(image_url)
-                # else:
-                #     print('Failed to send fire notification')
+            if fire_detected_time is None:
+                fire_detected_time = time.time()
+            elif time.time() - fire_detected_time >= 5:
+                text_color = (0, 0, 255)  # red for fire
+                frame_path = save_frame(frame)
+                image_url = upload_to_storage(frame_path)
+                if image_url:
+                    if write_to_database(image_url):
+                        logging.info(f'Fire alert successfully written to database with image URL: {image_url}')
+                        send_telegram_message('WARNING FIRE DETECTED!', frame_path)
+                    else:
+                        logging.error('Failed to write fire alert to database.')
+                fire_detected_time = time.time() 
+            else:
+                text_color = (0, 0, 255)  # red for fire
         else:
-            text_color = (0, 255, 0)  # Green for non_fire
+            text_color = (0, 255, 0)  # green for non_fire
+            fire_detected_time = None  
 
         font = cv2.FONT_HERSHEY_SIMPLEX
         cv2.putText(frame, f'Prediction: {predicted_label}', (150, 30), font, 1, text_color, 2, cv2.LINE_AA)
+
+        # warning text if fire detected for more than 10 seconds
+        if fire_detected_time and time.time() - fire_detected_time >= 10:
+            cv2.putText(frame, 'WARNING: FIRE DETECTED!', (150, 70), font, 1, (0, 0, 255), 2, cv2.LINE_AA)
+
         cv2.imshow('Video', frame)
 
-        if cv2.waitKey(1) & 0xFF == 13:  # Enter key
+        if cv2.waitKey(1) & 0xFF == 13:  # enter key
             break
 
     cap.release()
